@@ -1,23 +1,23 @@
-# GitHub Actions Workflow: Automatic Pull Request Management
-#
-# This workflow automatically approves, merges, or closes pull requests
-# based on the author of the PR. It enforces a policy that only
-# an approved bot user can have PRs automatically merged.
+name: Automatic Pull Request Management (Bot Only)
 
+# Trigger on PR actions: opened, updated (synchronize), or reopened
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Define necessary permissions for the workflow token
 permissions:
-  pull-requests: write   # Needed to approve and merge PRs
-  contents: write        # Needed to push changes or update files
+  pull-requests: write   # Needed to approve, merge, and close PRs
+  contents: write        # Needed to push the merge commit
   issues: write          # Needed to comment on PRs
 
 jobs:
   manage-pr:
+    # Ensure the workflow only runs if the PR targets the main branch
+    if: github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
     env:
-      # Approved bot username, defined in repository variables
+      # Approved bot username, defined in repository variables/secrets
       APPROVED_USER: ${{ vars.APPROVED_USER }}
 
     steps:
@@ -27,53 +27,61 @@ jobs:
           # Extract the PR author's login and export it for conditional steps
           PR_AUTHOR="${{ github.event.pull_request.user.login }}"
           echo "PR_AUTHOR=$PR_AUTHOR" >> $GITHUB_OUTPUT
-          echo "APPROVED_USER=${APPROVED_USER}" >> $GITHUB_OUTPUT
+          echo "APPROVED_USER=${{ env.APPROVED_USER }}" >> $GITHUB_OUTPUT
+          echo "::notice::Checking PR from $PR_AUTHOR against approved user ${{ env.APPROVED_USER }}"
 
       - name: Approve and Merge PR from Approved Bot
+        # Condition checks if the PR author matches the APPROVED_USER variable
         if: ${{ steps.pr_info.outputs.PR_AUTHOR == steps.pr_info.outputs.APPROVED_USER }}
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
+          # IMPORTANT: Use a dedicated PAT (GH_PAT_ALTERNATIVA) of the bot user 
+          # to ensure it has the authority to approve/merge, especially under 
+          # branch protection rules.
           github-token: ${{ secrets.GH_PAT_ALTERNATIVA }}
           script: |
             /**
-             * Automatically approves, merges, and comments on pull requests
+             * Automatically approves, merges (squash), and comments on pull requests
              * submitted by the trusted bot user.
              */
 
-            const pr = github.context.payload.pull_request;
-            const repo = github.context.payload.repository;
+            const { pull_request: pr, repository: repo } = github.context.payload;
+            const repoOwner = repo.owner.login;
+            const repoName = repo.name;
+            const prNumber = pr.number;
 
-            console.log(`Approving and merging PR #${pr.number} from ${pr.user.login}`);
+            console.log(`Approving and merging PR #${prNumber} from authorized user ${pr.user.login}`);
 
-            // Approve the pull request
+            // 1. Approve the pull request
             await github.rest.pulls.createReview({
-              owner: repo.owner.login,
-              repo: repo.name,
-              pull_number: pr.number,
+              owner: repoOwner,
+              repo: repoName,
+              pull_number: prNumber,
               event: "APPROVE",
-              body: "Automated approval: trusted contributor."
+              body: "Automated approval: trusted bot contributor."
             });
 
-            // Merge using squash to maintain a clean commit history
+            // 2. Merge using squash to maintain a clean commit history
             await github.rest.pulls.merge({
-              owner: repo.owner.login,
-              repo: repo.name,
-              pull_number: pr.number,
+              owner: repoOwner,
+              repo: repoName,
+              pull_number: prNumber,
               merge_method: "squash",
-              commit_title: `Feat: Auto-merge content for PR #${pr.number}`
+              commit_title: `Feat: Auto-merge content for PR #${prNumber} [Bot Merge]`
             });
 
-            // Comment confirmation on the PR
+            // 3. Comment confirmation on the PR
             await github.rest.issues.createComment({
-              owner: repo.owner.login,
-              repo: repo.name,
-              issue_number: pr.number,
-              body: "Automated merge completed successfully."
+              owner: repoOwner,
+              repo: repoName,
+              issue_number: prNumber,
+              body: "**Auto-Merge Complete:** Pull Request approved and squashed successfully by the authorized bot workflow."
             });
 
       - name: Reject and Close PR from Unapproved User
+        # Condition runs only if the PR author does NOT match the APPROVED_USER
         if: ${{ steps.pr_info.outputs.PR_AUTHOR != steps.pr_info.outputs.APPROVED_USER }}
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GH_PAT_ALTERNATIVA }}
           script: |
@@ -82,23 +90,32 @@ jobs:
              * and leaves a clear comment explaining repository policy.
              */
 
-            const pr = github.context.payload.pull_request;
-            const repo = github.context.payload.repository;
+            const { pull_request: pr, repository: repo } = github.context.payload;
+            const repoOwner = repo.owner.login;
+            const repoName = repo.name;
+            const prNumber = pr.number;
+            const approvedUser = process.env.APPROVED_USER;
 
-            console.log(`Rejecting PR #${pr.number} from ${pr.user.login}`);
+            console.log(`Rejecting and closing PR #${prNumber} from unauthorized user ${pr.user.login}`);
 
-            // Leave a comment explaining the reason for closure
+            const rejectionMessage = 
+              "**Pull Request Closed:**\n\n" +
+              "This repository is configured to only accept Pull Requests from a specific, automated bot user (`${approvedUser}`). " +
+              "Manual contributions must be submitted through an alternative process (e.g., filing an issue first). " +
+              "Thank you for your understanding. This PR has been automatically closed.";
+
+            // 1. Leave a comment explaining the reason for closure
             await github.rest.issues.createComment({
-              owner: repo.owner.login,
-              repo: repo.name,
-              issue_number: pr.number,
-              body: "Thank you for your contribution. Only automated bot PRs are accepted. This PR will be closed."
+              owner: repoOwner,
+              repo: repoName,
+              issue_number: prNumber,
+              body: rejectionMessage
             });
 
-            // Close the pull request
+            // 2. Close the pull request
             await github.rest.pulls.update({
-              owner: repo.owner.login,
-              repo: repo.name,
-              pull_number: pr.number,
+              owner: repoOwner,
+              repo: repoName,
+              pull_number: prNumber,
               state: "closed"
             });
