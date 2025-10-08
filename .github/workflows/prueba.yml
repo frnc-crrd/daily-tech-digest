@@ -77,7 +77,8 @@ jobs:
           # CRÍTICO: Aquí también usamos el PAT para comentar y cerrar
           github-token: ${{ secrets.GH_PAT_ALTERNATIVA }}
           script: |
-            const { pull_request: pr, repository: repo } = github.context.payload;
+            // FIX: Usamos 'context.payload' en lugar de 'github.context.payload'
+            const { pull_request: pr, repository: repo } = context.payload;
             const repoOwner = repo.owner.login;
             const repoName = repo.name;
             const prNumber = pr.number;
@@ -86,9 +87,10 @@ jobs:
 
             console.log(`Rejecting and closing PR #${prNumber} from unauthorized user ${pr.user.login}`);
 
+            // FIX: Usamos template literals (backticks) para interpolar correctamente la variable.
             const rejectionMessage = 
-              "**Pull Request Closed:**\n\n" +
-              "This repository is configured to only accept Pull Requests from a specific, automated bot user (`${approvedUser}`). " +
+              `**Pull Request Closed:**\n\n` +
+              `This repository is configured to only accept Pull Requests from a specific, automated bot user (\`${approvedUser}\`). ` +
               "Manual contributions must be submitted through an alternative process (e.g., filing an issue first). " +
               "Thank you for your understanding. This PR has been automatically closed.";
 
