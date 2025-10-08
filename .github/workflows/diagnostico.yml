@@ -1,0 +1,24 @@
+name: PR Variable Diagnostic Tool
+
+# Dispara manualmente para probar
+on: workflow_dispatch
+
+jobs:
+  check_vars:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar la Variable de Repositorio (APPROVED_USER)
+        run: |
+          echo "Variable APPROVED_USER (vars.APPROVED_USER):"
+          echo "${{ vars.APPROVED_USER }}"
+
+      - name: Verificar el Secreto (GH_PAT_ALTERNATIVA)
+        run: |
+          # Usamos un 'if' para evitar imprimir el secreto si existe, pero confirmamos su presencia.
+          if [ -n "${{ secrets.GH_PAT_ALTERNATIVA }}" ]; then
+            echo "Secreto GH_PAT_ALTERNATIVA: ¡EXISTE y no está vacío!"
+          else
+            echo "Secreto GH_PAT_ALTERNATIVA: ¡FALLÓ! (Vacío o no definido)"
+          fi
+
+# Una vez que confirmes que EXISTEN, bórralo y el problema estará resuelto.
