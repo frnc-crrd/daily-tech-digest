@@ -1,0 +1,110 @@
+name: PR Approver and Merger (Bot Logic)
+
+# CRÍTICO: Usa pull_request_target para acceso seguro a secretos/vars.
+# Ejecuta en el contexto del repositorio base, ignorando el código del fork.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+# Define permisos necesarios para las acciones de Aprobación/Cierre
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  manage-pr:
+    # Solo corre si es una PR lista para mergear y va a la rama principal (main)
+    if: github.event.pull_request.head.repo.full_name != github.repository && github.event.pull_request.draft == false && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    
+    # 1. PASO DE EXTRACCIÓN Y VALIDACIÓN
+    steps:
+      - name: Extract Pull Request Author
+        id: pr_info
+        run: |
+          # Extrae el autor del PR
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          # CRÍTICO: Aseguramos que la variable se resuelva aquí
+          APPROVED_USER="${{ vars.APPROVED_USER }}"
+          
+          echo "PR_AUTHOR=$PR_AUTHOR" >> $GITHUB_OUTPUT
+          echo "APPROVED_USER=$APPROVED_USER" >> $GITHUB_OUTPUT
+          
+          # Mensaje de depuración para confirmar los valores
+          echo "::notice::Checking PR from $PR_AUTHOR against approved user $APPROVED_USER"
+
+      # 2. PASO DE APROBACIÓN Y MERGE (Solo para frnc-crrd)
+      - name: Approve and Merge PR from Approved Bot
+        uses: actions/github-script@v7
+        # Se ejecuta SÓLO si el autor coincide con la variable APPROVED_USER
+        if: ${{ steps.pr_info.outputs.PR_AUTHOR == steps.pr_info.outputs.APPROVED_USER }}
+        with:
+          # CRÍTICO: Aquí usamos el PAT que tiene permisos de merge
+          github-token: ${{ secrets.GH_PAT_ALTERNATIVA }}
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            console.log(`Approving and merging PR #${prNumber} from approved bot user.`);
+
+            // 1. Approve the Pull Request
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              event: 'APPROVE',
+              body: '🤖 Automated approval by trusted bot logic.'
+            });
+
+            // 2. Merge the Pull Request (using rebase and merge)
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              merge_method: 'rebase' // Usa 'rebase' para un historial lineal
+            });
+            console.log(`PR #${prNumber} successfully merged.`);
+
+      # 3. PASO DE RECHAZO Y CIERRE (Para cualquier otro usuario)
+      - name: Reject and Close PR from Unapproved User
+        uses: actions/github-script@v7
+        # Se ejecuta SÓLO si el autor NO coincide con la variable APPROVED_USER
+        if: ${{ steps.pr_info.outputs.PR_AUTHOR != steps.pr_info.outputs.APPROVED_USER }}
+        with:
+          # CRÍTICO: Aquí también usamos el PAT para comentar y cerrar
+          github-token: ${{ secrets.GH_PAT_ALTERNATIVA }}
+          script: |
+            const { pull_request: pr, repository: repo } = github.context.payload;
+            const repoOwner = repo.owner.login;
+            const repoName = repo.name;
+            const prNumber = pr.number;
+            // APPROVED_USER se carga de las salidas del step anterior (pr_info)
+            const approvedUser = steps.pr_info.outputs.APPROVED_USER;
+
+            console.log(`Rejecting and closing PR #${prNumber} from unauthorized user ${pr.user.login}`);
+
+            const rejectionMessage = 
+              "**Pull Request Closed:**\n\n" +
+              "This repository is configured to only accept Pull Requests from a specific, automated bot user (`${approvedUser}`). " +
+              "Manual contributions must be submitted through an alternative process (e.g., filing an issue first). " +
+              "Thank you for your understanding. This PR has been automatically closed.";
+
+            // 1. Leave a comment explaining the reason for closure
+            await github.rest.issues.createComment({
+              owner: repoOwner,
+              repo: repoName,
+              issue_number: prNumber,
+              body: rejectionMessage
+            });
+
+            // 2. Close the pull request
+            await github.rest.pulls.update({
+              owner: repoOwner,
+              repo: repoName,
+              pull_number: prNumber,
+              state: "closed"
+            });
+            console.log(`PR #${prNumber} successfully closed.`);
